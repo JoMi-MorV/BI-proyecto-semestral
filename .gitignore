@@ -1,0 +1,44 @@
+# ==========================================
+# Entorno de Python y Caché
+# ==========================================
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+env/
+venv/
+ENV/
+
+# ==========================================
+# Jupyter Notebooks (Temporales)
+# ==========================================
+.ipynb_checkpoints/
+
+# ==========================================
+# Archivos de Datos (Data Directory)
+# ==========================================
+# Excluir todo el contenido procesado e histórico
+data/processed/*
+data/archive/*
+
+# Mantener la estructura de carpetas mediante .gitkeep
+!data/processed/.gitkeep
+!data/archive/.gitkeep
+
+# Excepción: Rastrear y subir el CSV crudo original
+!data/raw/uber_india_2024.csv
+
+# ==========================================
+# Almacenamiento Local de Bases de Datos
+# ==========================================
+*.db
+*.sqlite
+*.sqlite3
+
+# ==========================================
+# Archivos del Sistema Operativo y Editor
+# ==========================================
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
