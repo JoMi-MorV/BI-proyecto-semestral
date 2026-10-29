@@ -18,3 +18,19 @@ BI-proyecto-semestral/
 ├── main.py                # Archivo principal que orquesta todo el flujo
 ├── requirements.txt       # Dependencias del proyecto (pandas, openpyxl, etc.)
 └── .gitignore             # Excluir la carpeta data/ y archivos temporales
+
+
+# Ejecución con entrono virtual
+1.Crear el entorno virtual:Nombre estandarizado: .venv.Crea la carpeta oculta .venv para aislar las librerías del proyecto de tu sistema operativo:
+python3 -m venv .venv
+
+2.Activar el entorno virtual:Linux / Bash / Zsh.Carga las variables de entorno para que Python use los paquetes del entorno aislado:
+source venv/bin/activate
+
+3.Instalar las dependencias del proyecto:Pandas y OpenPyXL.
+Actualiza el gestor de paquetes pip e instala las librerías declaradas en requirements.txt:
+pip install -r requirements.txt
+
+4.Ejecutar el Pipeline ETL:Generación del DWH SQLite.Ejecuta el script orquestador principal:
+python main.py
+
