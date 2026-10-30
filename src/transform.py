@@ -1,165 +1,134 @@
 import pandas as pd
 import numpy as np
-from typing import Tuple, Dict
 
-def transform_data(df_raw: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, Dict]:
-    """
-    Aplica limpieza, estandarización semántica, Data Quality Gates (Tratamiento de Outliers)
-    y estructuración del Modelo Dimensional (Esquema en Estrella).
-    """
+def transform_data(df_raw: pd.DataFrame):
     print("[TRANSFORM] Iniciando depuración, validación de rangos y modelado dimensional...")
     
-    # 1. Normalizar nombres de columnas (limpiar espacios alrededor)
+    # 1. Copia de trabajo y deduplicación por Booking ID
     df_clean = df_raw.copy()
-    df_clean.columns = df_clean.columns.str.strip()
-
-    # Limpieza de valores comillados en Booking ID si existieran
-    df_clean["Booking ID"] = df_clean["Booking ID"].astype(str).str.replace('"', '').str.strip()
-
-    # 2. Auditoría y Deduplicación por Clave Natural (Booking ID)
-    registros_extraidos = len(df_clean)
-    df_clean = df_clean.drop_duplicates(subset=["Booking ID"]).copy()
-    duplicados_eliminados = registros_extraidos - len(df_clean)
+    df_clean = df_clean.drop_duplicates(subset=["Booking ID"]).reset_index(drop=True)
     
-    # 3. Consolidación de Causales de Cancelación y Atribución de Responsabilidad
-    def consolidar_cancelacion(row):
-        status = str(row["Booking Status"]).strip() if pd.notna(row["Booking Status"]) else ""
-        cust_reason = str(row["Reason for cancelling by Customer"]).strip() if pd.notna(row["Reason for cancelling by Customer"]) else ""
-        driver_reason = str(row["Driver Cancellation Reason"]).strip() if pd.notna(row["Driver Cancellation Reason"]) else ""
-        inc_reason = str(row["Incomplete Rides Reason"]).strip() if pd.notna(row["Incomplete Rides Reason"]) else ""
-
-        # Limpiar cadenas que sean "null" textual
-        if cust_reason.lower() in ["null", "none", "nan"]: cust_reason = ""
-        if driver_reason.lower() in ["null", "none", "nan"]: driver_reason = ""
-        if inc_reason.lower() in ["null", "none", "nan"]: inc_reason = ""
-
-        if "Canceled by Customer" in status or "Cancelled by Customer" in status:
-            reason = cust_reason if cust_reason != "" else "Motivo No Especificado (Cliente)"
-            return reason, "Cliente"
-        elif "Canceled by Driver" in status or "Cancelled by Driver" in status or status == "No Driver Found":
-            reason = driver_reason if driver_reason != "" else ("Sin Conductor Disponible" if status == "No Driver Found" else "Motivo No Especificado (Conductor)")
-            return reason, "Conductor"
-        elif "Incomplete" in status:
-            reason = inc_reason if inc_reason != "" else "Viaje Incompleto"
-            return reason, "Sistema / Operación"
-        else:
-            return "N/A - Viaje Completado", "N/A"
-
-    res = df_clean.apply(consolidar_cancelacion, axis=1)
-    df_clean["Cancellation_Reason"] = [r[0] for r in res]
-    df_clean["Cancelled_By"] = [r[1] for r in res]
-
-    # Conteo de nulos estandarizados a "N/A - Viaje Completado"
-    nulos_imputados_cancelacion = (df_clean["Cancellation_Reason"] == "N/A - Viaje Completado").sum()
-
-    # 4. Reglas de Negocio: Clasificación por Línea de Negocio
-    def obtener_linea_negocio(vehiculo: str) -> str:
-        vehiculo = str(vehiculo).strip()
-        if vehiculo in ["Auto", "eBike", "Bike", "eBike/Bike"]:
-            return "Movilidad Liviana y de Bajo Costo"
-        elif vehiculo in ["Go Mini", "Go Sedan"]:
-            return "Movilidad Urbana Estándar"
-        elif vehiculo in ["Premier Sedan", "UberXL"]:
-            return "Movilidad Premium y de Gran Capacidad"
-        return "Otros"
-
-    df_clean["Business_Line"] = df_clean["Vehicle Type"].apply(obtener_linea_negocio)
-
-    # 5. DATA QUALITY GATES: Conversión y Aplicación de Filtros de Rangos / Outliers
-    metric_cols = ["Booking Value", "Ride Distance", "Avg VTAT", "Avg CTAT", "Customer Rating", "Driver Ratings"]
-    for col in metric_cols:
+    # Limpieza de comillas y espacios en IDs
+    for col in ["Booking ID", "Customer ID"]:
         if col in df_clean.columns:
-            # Reemplazar 'null' por NaN y convertir a numérico flotante
             df_clean[col] = df_clean[col].astype(str).str.replace('"', '').str.strip()
-            df_clean[col] = df_clean[col].replace(['null', 'None', 'nan', ''], np.nan)
-            df_clean[col] = pd.to_numeric(df_clean[col], errors='coerce')
 
-    outliers_detectados = 0
+    # 2. Reemplazo de cadenas "null" a NaN real
+    df_clean = df_clean.replace(["null", "Null", "NULL", "nan", "NaN", ""], np.nan)
 
-    # Gate 1: Booking Value (0 <= Valor <= 10,000 INR)
-    cond_bv = (df_clean["Booking Value"] < 0) | (df_clean["Booking Value"] > 10000)
-    outliers_detectados += int(cond_bv.sum())
-    df_clean.loc[cond_bv, "Booking Value"] = np.nan
+    # 3. Quality Gates (Filtros de rangos)
+    outliers_count = 0
+    if "Booking Value" in df_clean.columns:
+        outliers_bv = df_clean[(df_clean["Booking Value"] < 0) | (df_clean["Booking Value"] > 10000)].shape[0]
+        df_clean.loc[(df_clean["Booking Value"] < 0) | (df_clean["Booking Value"] > 10000), "Booking Value"] = np.nan
+        outliers_count += outliers_bv
 
-    # Gate 2: Ride Distance (0.1 <= Distancia <= 500 km)
-    cond_rd = (df_clean["Ride Distance"] < 0.1) | (df_clean["Ride Distance"] > 500)
-    outliers_detectados += int(cond_rd.sum())
-    df_clean.loc[cond_rd, "Ride Distance"] = np.nan
+    if "Ride Distance" in df_clean.columns:
+        outliers_rd = df_clean[(df_clean["Ride Distance"] < 0.1) | (df_clean["Ride Distance"] > 500)].shape[0]
+        df_clean.loc[(df_clean["Ride Distance"] < 0.1) | (df_clean["Ride Distance"] > 500), "Ride Distance"] = np.nan
+        outliers_count += outliers_rd
 
-    # Gate 3: Tiempos Avg VTAT & Avg CTAT (0 <= Tiempo <= 120 min)
-    cond_vtat = (df_clean["Avg VTAT"] < 0) | (df_clean["Avg VTAT"] > 120)
-    cond_ctat = (df_clean["Avg CTAT"] < 0) | (df_clean["Avg CTAT"] > 120)
-    outliers_detectados += int(cond_vtat.sum()) + int(cond_ctat.sum())
-    df_clean.loc[cond_vtat, "Avg VTAT"] = np.nan
-    df_clean.loc[cond_ctat, "Avg CTAT"] = np.nan
+    print(f"[TRANSFORM] Depuración y Quality Gates completados. Outliers detectados: {outliers_count}")
 
-    # Gate 4: Ratings (1.0 <= Rating <= 5.0)
-    cond_cr = (df_clean["Customer Rating"] < 1.0) | (df_clean["Customer Rating"] > 5.0)
-    cond_dr = (df_clean["Driver Ratings"] < 1.0) | (df_clean["Driver Ratings"] > 5.0)
-    outliers_detectados += int(cond_cr.sum()) + int(cond_dr.sum())
-    df_clean.loc[cond_cr, "Customer Rating"] = np.nan
-    df_clean.loc[cond_dr, "Driver Ratings"] = np.nan
+    # 4. Normalización de Cancelaciones
+    df_clean["Cancelled_By"] = "N/A - Viaje Completado"
+    df_clean["Cancellation_Reason"] = "N/A - Viaje Completado"
 
-    # Estandarización de nombres de columnas de ratings
-    df_clean["Driver_Rating"] = df_clean["Driver Ratings"]
-    df_clean["Customer_Rating"] = df_clean["Customer Rating"]
+    mask_cust = df_clean["Cancelled Rides by Customer"] == 1.0
+    df_clean.loc[mask_cust, "Cancelled_By"] = "Cliente"
+    df_clean.loc[mask_cust, "Cancellation_Reason"] = df_clean.loc[mask_cust, "Reason for cancelling by Customer"].fillna("Razón no especificada")
 
-    # 6. Generación de Tablas de Dimensiones y Claves Sustitutas (SK)
+    mask_driv = df_clean["Cancelled Rides by Driver"] == 1.0
+    df_clean.loc[mask_driv, "Cancelled_By"] = "Conductor"
+    df_clean.loc[mask_driv, "Cancellation_Reason"] = df_clean.loc[mask_driv, "Driver Cancellation Reason"].fillna("Razón no especificada")
+
+    mask_inc = df_clean["Incomplete Rides"] == 1.0
+    df_clean.loc[mask_inc, "Cancelled_By"] = "Sistema / Operación"
+    df_clean.loc[mask_inc, "Cancellation_Reason"] = df_clean.loc[mask_inc, "Incomplete Rides Reason"].fillna("Incompleto por sistema")
+
+    # 5. Creación de Dimensiones Cualitativas
     # Dim_Vehiculo
-    dim_vehiculo = df_clean[["Vehicle Type", "Business_Line"]].drop_duplicates().reset_index(drop=True)
-    dim_vehiculo.rename(columns={"Vehicle Type": "Vehicle_Type"}, inplace=True)
+    dim_vehiculo = df_clean[["Vehicle Type"]].drop_duplicates().dropna().reset_index(drop=True)
     dim_vehiculo["Vehicle_SK"] = dim_vehiculo.index + 1
+    def clasificar_linea(vtype):
+        if vtype in ["eBike", "Bike", "Go Intercity"]: return "Liviana / Económica"
+        elif vtype in ["Auto", "Go Sedan"]: return "Estándar"
+        else: return "Premium / Carga"
+    dim_vehiculo["Business_Line"] = dim_vehiculo["Vehicle Type"].apply(clasificar_linea)
+    dim_vehiculo = dim_vehiculo[["Vehicle_SK", "Vehicle Type", "Business_Line"]]
 
     # Dim_MetodoPago
-    dim_pago = df_clean[["Payment Method"]].drop_duplicates().reset_index(drop=True)
-    dim_pago.rename(columns={"Payment Method": "Payment_Method"}, inplace=True)
+    dim_pago = df_clean[["Payment Method"]].drop_duplicates().dropna().reset_index(drop=True)
     dim_pago["Payment_SK"] = dim_pago.index + 1
+    dim_pago = dim_pago[["Payment_SK", "Payment Method"]]
 
     # Dim_Cancelacion
-    dim_cancelacion = df_clean[["Cancellation_Reason", "Cancelled_By"]].drop_duplicates().reset_index(drop=True)
+    dim_cancelacion = df_clean[["Cancelled_By", "Cancellation_Reason"]].drop_duplicates().reset_index(drop=True)
     dim_cancelacion["Cancellation_SK"] = dim_cancelacion.index + 1
+    dim_cancelacion = dim_cancelacion[["Cancellation_SK", "Cancelled_By", "Cancellation_Reason"]]
 
-    # 7. Mapeo de Claves Foráneas (FK) en Tabla de Hechos (Fact_Bookings)
-    df_clean_mapped = df_clean.rename(columns={
-        "Vehicle Type": "Vehicle_Type",
-        "Payment Method": "Payment_Method",
+    # 6. Creación de Dim_Tiempo
+    df_clean["Date_Parsed"] = pd.to_datetime(df_clean["Date"], errors='coerce')
+    if "Time" in df_clean.columns:
+        df_clean["Hora"] = pd.to_datetime(df_clean["Time"], format='%H:%M:%S', errors='coerce').dt.hour.fillna(0).astype(int)
+    else:
+        df_clean["Hora"] = 0
+
+    dim_tiempo = df_clean[["Date_Parsed", "Hora"]].drop_duplicates().dropna().reset_index(drop=True)
+    dim_tiempo["Time_SK"] = dim_tiempo["Date_Parsed"].dt.strftime('%Y%m%d').astype(int)
+    dim_tiempo["Fecha"] = dim_tiempo["Date_Parsed"].dt.strftime('%Y-%m-%d')
+    dim_tiempo["Anio"] = dim_tiempo["Date_Parsed"].dt.year
+    dim_tiempo["Mes"] = dim_tiempo["Date_Parsed"].dt.month
+    dim_tiempo["Nombre_Mes"] = dim_tiempo["Date_Parsed"].dt.strftime('%B')
+    dim_tiempo["Dia"] = dim_tiempo["Date_Parsed"].dt.day
+    dim_tiempo["Dia_Semana"] = dim_tiempo["Date_Parsed"].dt.strftime('%A')
+    dim_tiempo["Es_Fin_Semana"] = dim_tiempo["Date_Parsed"].dt.dayofweek.apply(lambda x: 1 if x >= 5 else 0)
+
+    def obtener_franja(hora: int) -> str:
+        if 0 <= hora < 6: return "Madrugada"
+        elif 6 <= hora < 12: return "Mañana (Pico AM)"
+        elif 12 <= hora < 18: return "Tarde"
+        else: return "Noche (Pico PM)"
+
+    dim_tiempo["Franja_Horaria"] = dim_tiempo["Hora"].apply(obtener_franja)
+    dim_tiempo = dim_tiempo[["Time_SK", "Fecha", "Anio", "Mes", "Nombre_Mes", "Dia", "Dia_Semana", "Es_Fin_Semana", "Hora", "Franja_Horaria"]].drop_duplicates(subset=["Time_SK", "Hora"]).reset_index(drop=True)
+
+    # 7. Mapeo de Claves Foráneas (FKs) a Fact_Bookings
+    df_clean["Time_SK"] = df_clean["Date_Parsed"].dt.strftime('%Y%m%d').fillna(0).astype(int)
+    
+    fact = df_clean.merge(dim_vehiculo, on="Vehicle Type", how="left") \
+                   .merge(dim_pago, on="Payment Method", how="left") \
+                   .merge(dim_cancelacion, on=["Cancelled_By", "Cancellation_Reason"], how="left")
+
+    fact["Vehicle_SK"] = fact["Vehicle_SK"].fillna(0).astype(int)
+    fact["Payment_SK"] = fact["Payment_SK"].fillna(0).astype(int)
+    fact["Cancellation_SK"] = fact["Cancellation_SK"].fillna(0).astype(int)
+
+    # Selección final de columnas para la Tabla de Hechos (Máximo 3 métricas cuantitativas)
+    fact_bookings = fact[[
+        "Booking ID", "Time_SK", "Vehicle_SK", "Payment_SK", "Cancellation_SK",
+        "Booking Status", "Customer ID", 
+        "Booking Value", "Ride Distance", "Avg VTAT"  # <--- Solo las 3 métricas clave
+    ]].copy()
+
+    fact_bookings.rename(columns={
         "Booking ID": "Booking_ID",
         "Booking Status": "Booking_Status",
+        "Customer ID": "Customer_ID",
         "Booking Value": "Booking_Value",
         "Ride Distance": "Ride_Distance",
-        "Avg VTAT": "Avg_VTAT",
-        "Avg CTAT": "Avg_CTAT"
-    })
-
-    fact_bookings = df_clean_mapped.merge(dim_vehiculo, on=["Vehicle_Type", "Business_Line"], how="left") \
-                                   .merge(dim_pago, on="Payment_Method", how="left") \
-                                   .merge(dim_cancelacion, on=["Cancellation_Reason", "Cancelled_By"], how="left")
-
-    # Selección final de la estructura desnormalizada para Fact_Bookings
-    fact_bookings = fact_bookings[[
-        "Booking_ID",
-        "Vehicle_SK",
-        "Payment_SK",
-        "Cancellation_SK",
-        "Booking_Status",
-        "Booking_Value",
-        "Ride_Distance",
-        "Avg_VTAT",
-        "Avg_CTAT",
-        "Customer_Rating",
-        "Driver_Rating"
-    ]]
+        "Avg VTAT": "Avg_VTAT"
+    }, inplace=True)
 
     metrics = {
-        "registros_extraidos": registros_extraidos,
-        "duplicados_eliminados": duplicados_eliminados,
-        "nulos_imputados_cancelacion": nulos_imputados_cancelacion,
-        "outliers_detectados": outliers_detectados,
-        "registros_fact_bookings": len(fact_bookings),
-        "total_dim_vehiculo": len(dim_vehiculo),
-        "total_dim_pago": len(dim_pago),
-        "total_dim_cancelacion": len(dim_cancelacion)
+        "raw_records": len(df_raw),
+        "duplicates_removed": len(df_raw) - len(df_clean),
+        "outliers_adjusted": outliers_count,
+        "loaded_records": len(fact_bookings),
+        "dim_vehiculo_count": len(dim_vehiculo),
+        "dim_pago_count": len(dim_pago),
+        "dim_cancelacion_count": len(dim_cancelacion),
+        "dim_tiempo_count": len(dim_tiempo)
     }
 
-    print(f"[TRANSFORM] Depuración y Quality Gates completados. Outliers detectados: {outliers_detectados}")
-    return fact_bookings, dim_vehiculo, dim_pago, dim_cancelacion, metrics
+    return fact_bookings, dim_vehiculo, dim_pago, dim_cancelacion, dim_tiempo, metrics
